@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bash
+
+if [[ $VERBOSE -eq 1 ]] ; then
+  exec \
+    /app/wstunnel -v --server wss://0.0.0.0:27832 --restrictTo=127.0.0.1:51820
+else
+  exec \
+    /app/wstunnel -q --server wss://0.0.0.0:27832 --restrictTo=127.0.0.1:51820
+fi

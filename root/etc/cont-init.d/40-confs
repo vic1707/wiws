@@ -9,6 +9,12 @@ ln -s /config/wg0.conf /etc/wireguard/wg0.conf
   cp /defaults/server.conf /config/templates/server.conf
 [[ ! -f /config/templates/peer.conf ]] && \
   cp /defaults/peer.conf /config/templates/peer.conf
+## WSTunnel
+[[ ! -f /config/templates/wspeer.unix.conf ]] && \
+  cp /defaults/wspeer.unix.conf /config/templates/wspeer.unix.conf
+[[ ! -f /config/templates/wspeer.win.conf ]] && \
+  cp /defaults/wspeer.win.conf /config/templates/wspeer.win.conf
+## WSTunnel
 
 generate_confs () {
   mkdir -p /config/server
@@ -32,24 +38,79 @@ DUDE"
       umask 077
       wg genkey | tee /config/${PEER_ID}/privatekey-${PEER_ID} | wg pubkey > /config/${PEER_ID}/publickey-${PEER_ID}
     fi
+    ## not sure if I have to modify for WSTunnel
     if [ -f "/config/${PEER_ID}/${PEER_ID}.conf" ]; then
       CLIENT_IP=$(cat /config/${PEER_ID}/${PEER_ID}.conf | grep "Address" | awk '{print $NF}')
       if [ -n "${ORIG_INTERFACE}" ] && [ "${INTERFACE}" != "${ORIG_INTERFACE}" ]; then
         CLIENT_IP=$(echo "${CLIENT_IP}" | sed "s|${ORIG_INTERFACE}|${INTERFACE}|")
       fi
     else
+    ## not sure if I have to modify for WSTunnel
       for idx in {2..254}; do
         PROPOSED_IP="${INTERFACE}.${idx}"
+        ## not sure if I have to modify for WSTunnel
         if ! grep -q -R "${PROPOSED_IP}" /config/peer*/*.conf && ([ -z "${ORIG_INTERFACE}" ] || ! grep -q -R "${ORIG_INTERFACE}.${idx}" /config/peer*/*.conf); then
           CLIENT_IP="${PROPOSED_IP}"
           break
         fi
+        ## not sure if I have to modify for WSTunnel
       done
     fi
     eval "`printf %s`
     cat <<DUDE > /config/${PEER_ID}/${PEER_ID}.conf
 `cat /config/templates/peer.conf`
 DUDE"
+    ## WSTunnel
+    eval "`printf %s`
+    cat <<DUDE > /config/${PEER_ID}/${PEER_ID}.unix.conf
+`cat /config/templates/wspeer.unix.conf`
+DUDE"
+    eval "`printf %s`
+    cat <<DUDE > /config/${PEER_ID}/${PEER_ID}.win.conf
+`cat /config/templates/wspeer.win.conf`
+DUDE"
+    ## Generating WSTunnem helper scripts ##
+    DEFAULT_UPDATE_HOSTS_UNIX='"/etc/hosts"'
+    DEFAULT_UPDATE_HOSTS_DNSMASQ='"/etc/dnsmasq.d/hosts"'
+    DEFAULT_UPDATE_HOSTS_WIN='"${Env:SystemRoot}\system32\drivers\etc\hosts"'
+    USING_DNSMASQ=${USINGDNSMASQ:-0}
+    SERVERURL=${SERVERURL-$(curl -s icanhazip.com)}
+    WSSERVERPORT=${WSSERVERPORT-27832}
+
+    envsubst < /defaults/wstunnel.env > /tmp/wstunnel.env.tmp
+
+    if [ "${USING_DNSMASQ}" -eq 1 ]; then
+      path="$DEFAULT_UPDATE_HOSTS_DNSMASQ"
+    else
+      path="$DEFAULT_UPDATE_HOSTS_UNIX"
+    fi
+    awk \
+      -v dns=$USING_DNSMASQ \
+      -v path=$path \
+      '
+        NR==5 {
+          file="/tmp/wstunnel.env.tmp";
+          while (getline l<file)
+            print "export "l;
+          print "export USING_DNSMASQ="dns;
+          print "export UPDATE_HOSTS="path;
+        }1
+      ' /defaults/wstunnel.sh > /config/${PEER_ID}/${PEER_ID}.wstunnel.sh
+
+    awk \
+      -v path=$DEFAULT_UPDATE_HOSTS_WIN \
+      '
+        NR==11 {
+          file="/tmp/wstunnel.env.tmp";
+          while ((getline l <file))
+            print "$"l;
+          print "$UPDATE_HOSTS="path;
+        }1
+      ' /defaults/wstunnel.ps1 > /config/${PEER_ID}/${PEER_ID}.wstunnel.ps1
+    rm /tmp/wstunnel.env.tmp
+    ## Generating WSTunnem helper scripts ##
+    ## WSTunnel
+
     SERVER_ALLOWEDIPS=SERVER_ALLOWEDIPS_PEER_${i}
     if [ -n "${!SERVER_ALLOWEDIPS}" ]; then
       echo "Adding ${!SERVER_ALLOWEDIPS} to wg0.conf's AllowedIPs for peer ${i}"
@@ -69,7 +130,7 @@ AllowedIPs = ${CLIENT_IP}/32
 
 DUDE
     fi
-    echo "PEER ${i} QR code:"
+    echo "PEER ${i} QR code (no WSTunnel):"
     qrencode -t ansiutf8 < /config/${PEER_ID}/${PEER_ID}.conf
     qrencode -o /config/${PEER_ID}/${PEER_ID}.png < /config/${PEER_ID}/${PEER_ID}.conf
   done
@@ -79,6 +140,7 @@ save_vars () {
   cat <<DUDE > /config/.donoteditthisfile
 ORIG_SERVERURL="$SERVERURL"
 ORIG_SERVERPORT="$SERVERPORT"
+ORIG_WSSERVERPORT="$WSSERVERPORT"
 ORIG_PEERDNS="$PEERDNS"
 ORIG_PEERS="$PEERS"
 ORIG_INTERFACE="$INTERFACE"
@@ -101,7 +163,9 @@ if [ -n "$PEERS" ]; then
     echo "**** External server address is set to $SERVERURL ****"
   fi
   SERVERPORT=${SERVERPORT:-51820}
+  WSSERVERPORT=${WSSERVERPORT:-27832}
   echo "**** External server port is set to ${SERVERPORT}. Make sure that port is properly forwarded to port 51820 inside this container ****"
+  echo "**** External wstunner-server port is set to ${WSSERVERPORT}. Make sure that port is properly forwarded to port 27832 inside this container ****"
   INTERNAL_SUBNET=${INTERNAL_SUBNET:-10.13.13.0}
   echo "**** Internal subnet is set to $INTERNAL_SUBNET ****"
   INTERFACE=$(echo "$INTERNAL_SUBNET" | awk 'BEGIN{FS=OFS="."} NF--')
@@ -121,7 +185,7 @@ if [ -n "$PEERS" ]; then
     echo "**** Server mode is selected ****"
     [[ -f /config/.donoteditthisfile ]] && \
       . /config/.donoteditthisfile
-    if [ "$SERVERURL" != "$ORIG_SERVERURL" ] || [ "$SERVERPORT" != "$ORIG_SERVERPORT" ] || [ "$PEERDNS" != "$ORIG_PEERDNS" ] || [ "$PEERS" != "$ORIG_PEERS" ] || [ "$INTERFACE" != "$ORIG_INTERFACE" ] || [ "$ALLOWEDIPS" != "$ORIG_ALLOWEDIPS" ]; then
+    if [ "$SERVERURL" != "$ORIG_SERVERURL" ] || [ "$SERVERPORT" != "$ORIG_SERVERPORT" ] || [ "$WSSERVERPORT" != "$ORIG_WSSERVERPORT" ] || [ "$PEERDNS" != "$ORIG_PEERDNS" ] || [ "$PEERS" != "$ORIG_PEERS" ] || [ "$INTERFACE" != "$ORIG_INTERFACE" ] || [ "$ALLOWEDIPS" != "$ORIG_ALLOWEDIPS" ]; then
       echo "**** Server related environment variables changed, regenerating 1 server and ${PEERS} peer/client confs ****"
       generate_confs
       save_vars
@@ -131,7 +195,7 @@ if [ -n "$PEERS" ]; then
   fi
 else
   echo "**** Not all environment variables are set, exiting ****"
-    sleep infinity
+  sleep infinity
 fi
 
 # set up CoreDNS
