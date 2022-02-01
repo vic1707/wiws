@@ -130,13 +130,8 @@ if [ -n "$PEERS" ]; then
     fi
   fi
 else
-  echo "**** Client mode selected. ****"
-  if [ ! -f /config/wg0.conf ]; then
-    echo "**** No client conf found. Provide your own client conf as \"/config/wg0.conf\" and restart the container. ****"
+  echo "**** Not all environment variables are set, exiting ****"
     sleep infinity
-  fi
-  echo "**** Disabling CoreDNS ****"
-  rm -rf /etc/services.d/coredns
 fi
 
 # set up CoreDNS
